@@ -212,7 +212,7 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'' };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:new Date().toISOString().slice(0,10) };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -223,13 +223,13 @@ function defaultConfig(){
     groupPhone:'089-8799939',
     feePerKg:2,
     grades:[
-      {id:uid(), name:'เบอร์ 1', lastPrice:0},
-      {id:uid(), name:'เบอร์ 2', lastPrice:0},
-      {id:uid(), name:'เบอร์ 3', lastPrice:0},
-      {id:uid(), name:'เบอร์ 4', lastPrice:0},
-      {id:uid(), name:'เบอร์ดำ', lastPrice:0},
-      {id:uid(), name:'เบอร์มันลาย', lastPrice:0},
-      {id:uid(), name:'เบอร์กากใหญ่', lastPrice:0},
+      {id:uid(), name:'เบอร์ 1', price:0},
+      {id:uid(), name:'เบอร์ 2', price:0},
+      {id:uid(), name:'เบอร์ 3', price:0},
+      {id:uid(), name:'เบอร์ 4', price:0},
+      {id:uid(), name:'เบอร์ดำ', price:0},
+      {id:uid(), name:'เบอร์มันลาย', price:0},
+      {id:uid(), name:'เบอร์กากใหญ่', price:0},
     ]
   };
 }
@@ -260,13 +260,17 @@ function resetDraft(){
     ownerName:'',
     date:new Date().toISOString().slice(0,10),
     feePerKg:state.config.feePerKg,
-    grades:state.config.grades.map(g=>({gradeId:g.id, name:g.name, price:g.lastPrice||0, entries:[]}))
+    grades:state.config.grades.map(g=>({gradeId:g.id, name:g.name, entries:[]}))
   };
 }
 
 /* ---------------- Calculations ---------------- */
+function getGradePrice(gradeId){
+  const g = state.config.grades.find(x=>x.id===gradeId);
+  return g ? (g.price||0) : 0;
+}
 function gradeWeight(dg){ return dg.entries.reduce((s,w)=>s+w,0); }
-function gradeAmount(dg){ return Math.round(gradeWeight(dg)*(dg.price||0)); }
+function gradeAmount(dg){ return Math.round(gradeWeight(dg)*getGradePrice(dg.gradeId)); }
 function draftTotals(d){
   let totalWeight=0, totalAmount=0;
   d.grades.forEach(dg=>{ totalWeight+=gradeWeight(dg); totalAmount+=gradeAmount(dg); });
@@ -337,14 +341,15 @@ function renderNew(){
   <div class="card">
     <h2>รายละเอียด (กก.) แต่ละเบอร์</h2>
     ${d.grades.map(dg=>{
-      const w = gradeWeight(dg), amt = gradeAmount(dg);
+      const w = gradeWeight(dg), amt = gradeAmount(dg), price = getGradePrice(dg.gradeId);
       return `
       <div class="grade-row" data-grade="${dg.gradeId}">
         <div class="grade-head">
           <div class="gname">${dg.name}${w>0?`<span class="tag">${fmtNum(w)} กก.</span>`:''}</div>
           <div class="price-inline">
-            <span>ราคา/กก.</span>
-            <input type="number" inputmode="decimal" step="0.01" min="0" data-action="price" data-grade="${dg.gradeId}" value="${dg.price||''}" placeholder="0">
+            ${price>0
+              ? `<span>ราคา</span><b class="num">${fmtNum(price)}</b><span>บ./กก.</span>`
+              : `<button type="button" data-action="tab" data-tab="settings" style="background:none;border:1px solid var(--accent-gold);color:var(--accent-gold);border-radius:7px;padding:4px 8px;font-size:11.5px;font-weight:700;cursor:pointer;">ยังไม่ตั้งราคา · ไปตั้งค่า</button>`}
           </div>
         </div>
         <div class="chips">
@@ -392,10 +397,12 @@ function renderSettings(){
   </div>
 
   <div class="card">
-    <h2>รายการเบอร์มังคุด</h2>
+    <h2>เบอร์มังคุด &amp; ราคาประมูลวันนี้</h2>
+    <p style="font-size:12px;color:var(--ink-soft);margin:-4px 0 10px;">ตั้งราคาที่ประมูลได้ของวันนี้ที่นี่ที่เดียว หน้าบันทึกใบเสร็จจะดึงราคานี้ไปใช้อัตโนมัติ</p>
     ${c.grades.map(g=>`
       <div class="glist-row" data-grade="${g.id}">
-        <input type="text" data-action="gradeName" data-grade="${g.id}" value="${escapeAttr(g.name)}">
+        <input type="text" data-action="gradeName" data-grade="${g.id}" value="${escapeAttr(g.name)}" style="flex:1.3;">
+        <input type="number" inputmode="decimal" step="0.01" min="0" data-action="gradePrice" data-grade="${g.id}" value="${g.price||''}" placeholder="ราคา/กก." style="flex:1;">
         <button data-action="rmGrade" data-grade="${g.id}">×</button>
       </div>`).join('')}
     <div class="add-grade-row">
@@ -403,10 +410,12 @@ function renderSettings(){
       <button data-action="addGrade">เพิ่มเบอร์</button>
     </div>
   </div>
-  <p style="font-size:12px;color:var(--ink-soft);padding:0 4px 20px;">การแก้ไขรายการเบอร์จะมีผลกับใบเสร็จใหม่เท่านั้น ไม่กระทบใบเสร็จที่บันทึกไว้แล้ว</p>`;
+  <p style="font-size:12px;color:var(--ink-soft);padding:0 4px 20px;">การแก้ไขรายการเบอร์และราคาจะมีผลกับใบเสร็จใหม่เท่านั้น ไม่กระทบใบเสร็จที่บันทึกไว้แล้ว</p>`;
 }
 
 function renderHistory(){
+  if(state.historyMode==='daily') return renderDaily();
+
   const q = state.search.trim().toLowerCase();
   let list = state.receipts.slice().sort((a,b)=>b.createdAt-a.createdAt);
   if(q) list = list.filter(r=>r.ownerName.toLowerCase().includes(q));
@@ -447,7 +456,64 @@ function toggleRow(){
   return `<div class="toggle-row">
     <button data-action="histMode" data-mode="list" class="${state.historyMode==='list'?'active':''}">รายการใบเสร็จ</button>
     <button data-action="histMode" data-mode="members" class="${state.historyMode==='members'?'active':''}">สรุปรายบุคคล</button>
+    <button data-action="histMode" data-mode="daily" class="${state.historyMode==='daily'?'active':''}">รายงานประจำวัน</button>
   </div>`;
+}
+
+function computeDaily(dateStr){
+  const receipts = state.receipts.filter(r=>r.date===dateStr).sort((a,b)=>a.createdAt-b.createdAt);
+  const gradeTotals = {};
+  let totalWeight=0, totalAmount=0, totalFee=0, totalNet=0;
+  receipts.forEach(r=>{
+    totalWeight+=r.totalWeight; totalAmount+=r.totalAmount; totalFee+=r.fee; totalNet+=r.net;
+    r.grades.forEach(g=>{
+      if(g.weight<=0) return;
+      if(!gradeTotals[g.name]) gradeTotals[g.name]={weight:0, amount:0};
+      gradeTotals[g.name].weight+=g.weight; gradeTotals[g.name].amount+=g.amount;
+    });
+  });
+  return {receipts, gradeTotals, totalWeight, totalAmount, totalFee, totalNet};
+}
+
+function renderDaily(){
+  const dateStr = state.reportDate;
+  const rep = computeDaily(dateStr);
+  return `
+  <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน" data-action="search" value="${escapeAttr(state.search)}"></div>
+  ${toggleRow()}
+  <div class="card">
+    <h2>เลือกวันที่ต้องการออกรายงาน</h2>
+    <input type="date" data-action="reportDate" value="${dateStr}">
+  </div>
+  <div class="card">
+    <h2>รายชื่อสมาชิกวันที่ ${formatThaiDate(dateStr)}</h2>
+    ${rep.receipts.length? rep.receipts.map(r=>`
+      <div class="receipt-item" data-action="viewReceipt" data-id="${r.id}">
+        <div class="top-line"><span>${escapeHtml(r.ownerName)}</span><span class="num">${fmtNum(r.net)} บาท</span></div>
+        <div class="sub-line"><span>${fmtNum(r.totalWeight)} กก.</span><span class="val">${r.grades.filter(g=>g.weight>0).length} เบอร์</span></div>
+      </div>`).join('') : `<div class="empty">ยังไม่มีใบเสร็จของวันนี้</div>`}
+  </div>
+  ${rep.receipts.length? `
+  <div class="card">
+    <h2>รวมตามเบอร์</h2>
+    ${Object.keys(rep.gradeTotals).map(name=>`
+      <div class="grade-foot" style="border-top:1px dashed var(--border);padding-top:8px;margin-top:4px;">
+        <span>${escapeHtml(name)}</span>
+        <span class="num">${fmtNum(rep.gradeTotals[name].weight)} กก. • ${fmtNum(rep.gradeTotals[name].amount)} บาท</span>
+      </div>`).join('')}
+  </div>
+  <div class="card summary-card">
+    <div class="srow"><span>จำนวนสมาชิกวันนี้</span><span class="val num">${rep.receipts.length} ราย</span></div>
+    <div class="srow"><span>น้ำหนักรวม</span><span class="val num">${fmtNum(rep.totalWeight)} กก.</span></div>
+    <div class="srow"><span>รวมเงิน</span><span class="val num">${fmtNum(rep.totalAmount)} บาท</span></div>
+    <div class="srow"><span>ค่าบริการรวม</span><span class="val num">${fmtNum(rep.totalFee)} บาท</span></div>
+    <div class="srow net"><span>สุทธิรวมทั้งวัน</span><span class="val num">${fmtNum(rep.totalNet)} บาท</span></div>
+  </div>
+  <div class="actions">
+    <button class="btn ghost" data-action="exportCsv" data-date="${dateStr}">Export CSV</button>
+    <button class="btn primary" data-action="printDaily" data-date="${dateStr}">พิมพ์รายงาน</button>
+  </div>` : ''}
+  `;
 }
 
 function renderDetail(){
@@ -511,6 +577,50 @@ function doPrint(r){
   setTimeout(()=>window.print(), 50);
 }
 
+function buildPrintReportHtml(dateStr){
+  const rep = computeDaily(dateStr);
+  return `
+  <div class="pr-center">
+    <div class="pr-title">${escapeHtml(state.config.groupName)}</div>
+    <div class="pr-sub">รายงานประจำวัน</div>
+    <div class="pr-sub">วันที่ ${formatThaiDate(dateStr)}</div>
+  </div>
+  <div class="pr-hr"></div>
+  ${rep.receipts.length? rep.receipts.map(r=>`<div class="pr-row"><span>${escapeHtml(r.ownerName)}</span><span>${fmtNum(r.totalWeight)} กก. / ${fmtNum(r.net)} บ.</span></div>`).join('') : '<div class="pr-row"><span>ไม่มีรายการ</span><span></span></div>'}
+  <div class="pr-hr"></div>
+  ${Object.keys(rep.gradeTotals).map(name=>`<div class="pr-row"><span>${escapeHtml(name)}</span><span>${fmtNum(rep.gradeTotals[name].weight)} กก. / ${fmtNum(rep.gradeTotals[name].amount)} บ.</span></div>`).join('')}
+  <div class="pr-hr"></div>
+  <div class="pr-row"><span>จำนวนสมาชิก</span><span>${rep.receipts.length} ราย</span></div>
+  <div class="pr-row"><span>น้ำหนักรวมทั้งหมด</span><span>${fmtNum(rep.totalWeight)} กก.</span></div>
+  <div class="pr-row"><span>รวมเงิน</span><span>${fmtNum(rep.totalAmount)} บาท</span></div>
+  <div class="pr-row"><span>ค่าบริการรวม</span><span>${fmtNum(rep.totalFee)} บาท</span></div>
+  <div class="pr-hr"></div>
+  <div class="pr-total"><span>สุทธิรวมทั้งวัน</span><span>${fmtNum(rep.totalNet)} บาท</span></div>
+  `;
+}
+function doPrintReport(dateStr){
+  document.getElementById('print-area').innerHTML = buildPrintReportHtml(dateStr);
+  setTimeout(()=>window.print(), 50);
+}
+
+function exportCsv(dateStr){
+  const rep = computeDaily(dateStr);
+  if(!rep.receipts.length){ alert('ไม่มีข้อมูลของวันที่นี้'); return; }
+  let csv = 'ชื่อเจ้าของสวน,น้ำหนักรวม(กก.),รวมเงิน(บาท),ค่าบริการ(บาท),สุทธิ(บาท)\n';
+  rep.receipts.forEach(r=>{
+    csv += `"${r.ownerName.replace(/"/g,'""')}",${r.totalWeight},${r.totalAmount},${r.fee},${r.net}\n`;
+  });
+  csv += `รวมทั้งวัน,${rep.totalWeight},${rep.totalAmount},${rep.totalFee},${rep.totalNet}\n`;
+  try{
+    const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `รายงาน-${dateStr}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }catch(e){ alert('ไม่สามารถดาวน์โหลดไฟล์ในอุปกรณ์นี้ได้ ลองใช้ปุ่มพิมพ์รายงานแทน'); }
+}
+
 /* ---------------- Actions ---------------- */
 async function saveReceipt(){
   const d = state.draft;
@@ -523,19 +633,12 @@ async function saveReceipt(){
     ownerName:d.ownerName.trim(),
     date:d.date,
     feePerKg:d.feePerKg,
-    grades:d.grades.map(dg=>({name:dg.name, price:dg.price, entries:dg.entries.slice(), weight:gradeWeight(dg), amount:gradeAmount(dg)})),
+    grades:d.grades.map(dg=>({name:dg.name, price:getGradePrice(dg.gradeId), entries:dg.entries.slice(), weight:gradeWeight(dg), amount:gradeAmount(dg)})),
     totalWeight:t.totalWeight, totalAmount:t.totalAmount, fee:t.fee, net:t.net,
     createdAt:Date.now()
   };
   state.receipts.push(receipt);
   await saveReceiptsList();
-
-  // remember last prices used
-  d.grades.forEach(dg=>{
-    const g = state.config.grades.find(x=>x.id===dg.gradeId);
-    if(g && dg.price) g.lastPrice = dg.price;
-  });
-  await saveConfig();
 
   resetDraft();
   doPrint(receipt);
@@ -581,6 +684,8 @@ document.addEventListener('click', async (e)=>{
     if(r) doPrint(r);
     return;
   }
+  if(action==='printDaily'){ doPrintReport(el.dataset.date); return; }
+  if(action==='exportCsv'){ exportCsv(el.dataset.date); return; }
   if(action==='deleteReceipt'){
     if(confirm('ยืนยันการลบใบเสร็จนี้? ไม่สามารถกู้คืนได้')){
       state.receipts = state.receipts.filter(x=>x.id!==el.dataset.id);
@@ -594,7 +699,7 @@ document.addEventListener('click', async (e)=>{
     const input = document.getElementById('newGradeName');
     const name = input.value.trim();
     if(name){
-      state.config.grades.push({id:uid(), name, lastPrice:0});
+      state.config.grades.push({id:uid(), name, price:0});
       await saveConfig();
       render();
     }
@@ -628,17 +733,16 @@ document.addEventListener('input', (e)=>{
   if(t.dataset.field==='ownerName'){ state.draft.ownerName = t.value; return; }
   if(t.dataset.field==='date'){ state.draft.date = t.value; return; }
   if(t.dataset.field==='feePerKg'){ state.draft.feePerKg = parseFloat(t.value)||0; refreshSummaryOnly(); return; }
-  if(t.dataset.action==='price'){
-    const gid = t.dataset.grade;
-    const dg = state.draft.grades.find(x=>x.gradeId===gid);
-    dg.price = parseFloat(t.value)||0;
-    refreshSummaryOnly();
-    return;
-  }
   if(t.dataset.action==='search'){ state.search = t.value; render(); return; }
+  if(t.dataset.action==='reportDate'){ state.reportDate = t.value; render(); return; }
   if(t.dataset.action==='gradeName'){
     const g = state.config.grades.find(x=>x.id===t.dataset.grade);
     if(g){ g.name = t.value; saveConfig(); }
+    return;
+  }
+  if(t.dataset.action==='gradePrice'){
+    const g = state.config.grades.find(x=>x.id===t.dataset.grade);
+    if(g){ g.price = parseFloat(t.value)||0; saveConfig(); }
     return;
   }
   if(t.dataset.cfg){
