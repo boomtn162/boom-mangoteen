@@ -229,13 +229,25 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:new Date().toISOString().slice(0,10), reportMonth:new Date().toISOString().slice(0,7), selectMode:false, selectedIds:[] };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[] };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
+// toISOString() returns the UTC date, which is wrong for Thailand (UTC+7) during
+// early morning hours (00:00-06:59 local is still "yesterday" in UTC). Use local
+// date parts instead so today's date is always correct regardless of time of day.
+function todayLocalISO(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function todayLocalMonth(){
+  const d = new Date();
+  return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+}
+
 function defaultConfig(){
   return {
-    groupName:'บูมกลุ่มมังคุดคุณภาพ',
+    groupName:'บูมกลุ่มมังคุดคุณภาพชะอวด',
     groupAddr:'ม.4 ต.เกาะขันธ์ อ.ชะอวด จ.นครศรีธรรมราช',
     groupPhone:'089-8799939',
     feePerKg:2,
@@ -295,7 +307,7 @@ async function saveReceiptsList(){
 function resetDraft(){
   state.draft = {
     ownerName:'',
-    date:new Date().toISOString().slice(0,10),
+    date:todayLocalISO(),
     feePerKg:state.config.feePerKg,
     grades:state.config.grades.map(g=>({gradeId:g.id, name:g.name, entries:[]}))
   };
@@ -938,7 +950,7 @@ function exportBackup(){
     const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    const stamp = new Date().toISOString().slice(0,10);
+    const stamp = todayLocalISO();
     a.href = url; a.download = `pos-backup-${stamp}.json`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
