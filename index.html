@@ -193,6 +193,7 @@
   #print-area{ display:none; }
 
   @media print{
+    body{ background:#fff !important; }
     #app{ display:none !important; }
     #print-area{
       display:block !important; width:80mm;
@@ -200,10 +201,12 @@
     }
     #print-area.mode-a4{ width:100%; padding:0; }
   }
-  .a4-grid{ display:grid; grid-template-columns:1fr 1fr; }
+  .a4-page{ width:100%; height:277mm; page-break-after:always; }
+  .a4-page:last-child{ page-break-after:auto; }
+  .a4-grid{ display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; height:100%; }
   .a4-cell{
     border:1px dashed #888; padding:6mm; box-sizing:border-box;
-    break-inside:avoid; page-break-inside:avoid;
+    break-inside:avoid; page-break-inside:avoid; background:#fff; overflow:hidden;
   }
   .pr-center{ text-align:center; }
   .pr-title{ font-size:14px; font-weight:700; }
@@ -219,6 +222,7 @@
     main{ padding:0; }
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 <div id="app"></div>
@@ -308,7 +312,7 @@ function gradeAmount(dg){ return Math.round(gradeWeight(dg)*getGradePrice(dg.gra
 function draftTotals(d){
   let totalWeight=0, totalAmount=0;
   d.grades.forEach(dg=>{ totalWeight+=gradeWeight(dg); totalAmount+=gradeAmount(dg); });
-  const fee = Math.round(totalWeight*(d.feePerKg||0));
+  const fee = Math.floor(totalWeight*(d.feePerKg||0));
   const net = totalAmount - fee;
   return {totalWeight, totalAmount, fee, net};
 }
@@ -681,6 +685,7 @@ function renderDetail(){
   <div class="actions">
     <button class="btn ghost" data-action="editReceipt" data-id="${r.id}">แก้ไข</button>
     <button class="btn danger" data-action="deleteReceipt" data-id="${r.id}">ลบใบเสร็จ</button>
+    <button class="btn ghost" data-action="shareReceipt" data-id="${r.id}">แชร์ใบเสร็จ</button>
     <button class="btn primary" data-action="printExisting" data-id="${r.id}">พิมพ์ใบเสร็จ</button>
   </div>`;
 }
@@ -729,6 +734,36 @@ function doPrint(r){
   prepareThermalPrint();
   document.getElementById('print-area').innerHTML = buildPrintHtml(r);
   setTimeout(()=>window.print(), 50);
+}
+
+function shareReceipt(r){
+  if(typeof html2canvas==='undefined'){ alert('ไม่สามารถโหลดตัวช่วยสร้างรูปได้ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'); return; }
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:320px;background:#ffffff;padding:16px;font-family:Sarabun,sans-serif;color:#000;';
+  wrapper.innerHTML = buildPrintHtml(r);
+  document.body.appendChild(wrapper);
+  html2canvas(wrapper, {backgroundColor:'#ffffff', scale:2}).then(canvas=>{
+    canvas.toBlob(async (blob)=>{
+      document.body.removeChild(wrapper);
+      if(!blob){ alert('ไม่สามารถสร้างรูปใบเสร็จได้'); return; }
+      const fileName = `receipt-${formatReceiptNo(r.receiptNo)}.png`;
+      const file = new File([blob], fileName, {type:'image/png'});
+      if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
+        try{
+          await navigator.share({files:[file], title:'ใบเสร็จ '+formatReceiptNo(r.receiptNo), text:`ใบเสร็จ ${formatReceiptNo(r.receiptNo)} - ${r.ownerName}`});
+          return;
+        }catch(e){ /* user cancelled the share sheet, or share failed - fall through to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }).catch(()=>{
+    if(wrapper.parentNode) document.body.removeChild(wrapper);
+    alert('ไม่สามารถสร้างรูปใบเสร็จได้ ลองอีกครั้ง');
+  });
 }
 
 function buildPrintReportHtml(dateStr){
@@ -794,7 +829,12 @@ function doPrintSelectedA4(ids){
   setPageStyle('@page{ size:A4; margin:10mm; }');
   const area = document.getElementById('print-area');
   area.classList.add('mode-a4');
-  area.innerHTML = `<div class="a4-grid">${receipts.map(r=>`<div class="a4-cell">${buildPrintHtml(r)}</div>`).join('')}</div>`;
+  const pages = [];
+  for(let i=0;i<receipts.length;i+=4){ pages.push(receipts.slice(i,i+4)); }
+  area.innerHTML = pages.map(pageReceipts=>`
+    <div class="a4-page">
+      <div class="a4-grid">${pageReceipts.map(r=>`<div class="a4-cell">${buildPrintHtml(r)}</div>`).join('')}</div>
+    </div>`).join('');
   setTimeout(()=>window.print(), 50);
 }
 
@@ -1013,6 +1053,11 @@ document.addEventListener('click', async (e)=>{
   if(action==='printExisting'){
     const r = state.receipts.find(x=>x.id===el.dataset.id);
     if(r) doPrint(r);
+    return;
+  }
+  if(action==='shareReceipt'){
+    const r = state.receipts.find(x=>x.id===el.dataset.id);
+    if(r) shareReceipt(r);
     return;
   }
   if(action==='printDaily'){ doPrintReport(el.dataset.date); return; }
