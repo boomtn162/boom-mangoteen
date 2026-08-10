@@ -159,10 +159,20 @@
     font-weight:600; font-size:12px; color:var(--ink-soft); cursor:pointer;
   }
   .toggle-row button.active{ background:var(--primary); color:#fff; border-color:var(--primary); }
+  .select-bar{ margin-bottom:10px; }
+  .select-bar button{
+    width:100%; padding:9px; border-radius:9px; border:1.5px dashed var(--primary); background:#fff;
+    color:var(--primary); font-weight:600; font-size:13px; cursor:pointer;
+  }
+  .select-bar button.active{ background:var(--primary); color:#fff; border-style:solid; }
   .receipt-item{
     background:var(--card); border:1px solid var(--border); border-radius:12px;
     padding:12px 14px; margin-bottom:9px; cursor:pointer;
+    display:flex; align-items:flex-start; gap:10px;
   }
+  .receipt-item.selected{ border-color:var(--accent); background:#F1F7EA; }
+  .receipt-item .sel-check{ width:19px; height:19px; margin-top:3px; flex-shrink:0; accent-color:var(--accent); }
+  .receipt-item .ri-body{ flex:1; min-width:0; }
   .receipt-item .top-line{ display:flex; justify-content:space-between; font-weight:700; font-size:14.5px; }
   .receipt-item .sub-line{ display:flex; justify-content:space-between; font-size:12.5px; color:var(--ink-soft); margin-top:3px; }
   .receipt-item .sub-line .val{ font-family:'JetBrains Mono',monospace; color:var(--accent); font-weight:700; }
@@ -188,7 +198,12 @@
       display:block !important; width:80mm;
       padding:3mm; font-family:'Sarabun',sans-serif; color:#000;
     }
-    @page{ size:80mm auto; margin:0; }
+    #print-area.mode-a4{ width:100%; padding:0; }
+  }
+  .a4-grid{ display:grid; grid-template-columns:1fr 1fr; }
+  .a4-cell{
+    border:1px dashed #888; padding:6mm; box-sizing:border-box;
+    break-inside:avoid; page-break-inside:avoid;
   }
   .pr-center{ text-align:center; }
   .pr-title{ font-size:14px; font-weight:700; }
@@ -211,7 +226,7 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:new Date().toISOString().slice(0,10), reportMonth:new Date().toISOString().slice(0,7) };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:new Date().toISOString().slice(0,10), reportMonth:new Date().toISOString().slice(0,7), selectMode:false, selectedIds:[] };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -491,11 +506,27 @@ function renderHistory(){
   return `
   <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน" data-action="search" value="${escapeAttr(state.search)}"></div>
   ${toggleRow()}
-  ${list.length? list.map(r=>`
-    <div class="receipt-item" data-action="viewReceipt" data-id="${r.id}">
-      <div class="top-line"><span>${formatReceiptNo(r.receiptNo)} ${escapeHtml(r.ownerName)}</span><span>${formatThaiDate(r.date)}</span></div>
-      <div class="sub-line"><span>${fmtNum(r.totalWeight)} กก.</span><span class="val">${fmtNum(r.net)} บาท</span></div>
-    </div>`).join('') : `<div class="empty">ยังไม่มีใบเสร็จที่บันทึกไว้</div>`}
+  <div class="select-bar">
+    <button data-action="toggleSelectMode" class="${state.selectMode?'active':''}">${state.selectMode? '✕ ยกเลิกการเลือก' : '🖨️ เลือกหลายใบพิมพ์ลง A4'}</button>
+  </div>
+  ${list.length? list.map(r=>{
+    const checked = state.selectMode && state.selectedIds.includes(r.id);
+    return `
+    <div class="receipt-item ${checked?'selected':''}" data-action="${state.selectMode?'toggleSelect':'viewReceipt'}" data-id="${r.id}">
+      ${state.selectMode? `<input type="checkbox" class="sel-check" data-action="toggleSelect" data-id="${r.id}" ${checked?'checked':''}>` : ''}
+      <div class="ri-body">
+        <div class="top-line"><span>${formatReceiptNo(r.receiptNo)} ${escapeHtml(r.ownerName)}</span><span>${formatThaiDate(r.date)}</span></div>
+        <div class="sub-line"><span>${fmtNum(r.totalWeight)} กก.</span><span class="val">${fmtNum(r.net)} บาท</span></div>
+      </div>
+    </div>`;
+  }).join('') : `<div class="empty">ยังไม่มีใบเสร็จที่บันทึกไว้</div>`}
+  ${state.selectMode && state.selectedIds.length? `
+  <div class="card summary-card" style="position:sticky; bottom:12px; z-index:5;">
+    <div class="srow"><span>เลือกไว้พิมพ์</span><span class="val num">${state.selectedIds.length} ใบ</span></div>
+    <div class="actions" style="margin:8px 0 0;">
+      <button class="btn primary" data-action="printSelectedA4">พิมพ์ลง A4 (ตัดแบ่งได้)</button>
+    </div>
+  </div>` : ''}
   `;
 }
 function toggleRow(){
@@ -684,7 +715,18 @@ function buildPrintHtml(r){
   <div class="pr-center" style="margin-top:10px;font-size:10px;">ขอบคุณที่ร่วมกับกลุ่มของเรา</div>
   `;
 }
+function setPageStyle(css){
+  let tag = document.getElementById('page-style');
+  if(!tag){ tag = document.createElement('style'); tag.id='page-style'; document.head.appendChild(tag); }
+  tag.textContent = css;
+}
+function prepareThermalPrint(){
+  setPageStyle('@page{ size:80mm auto; margin:0; }');
+  document.getElementById('print-area').classList.remove('mode-a4');
+}
+
 function doPrint(r){
+  prepareThermalPrint();
   document.getElementById('print-area').innerHTML = buildPrintHtml(r);
   setTimeout(()=>window.print(), 50);
 }
@@ -711,6 +753,7 @@ function buildPrintReportHtml(dateStr){
   `;
 }
 function doPrintReport(dateStr){
+  prepareThermalPrint();
   document.getElementById('print-area').innerHTML = buildPrintReportHtml(dateStr);
   setTimeout(()=>window.print(), 50);
 }
@@ -739,7 +782,19 @@ function buildPrintMonthlyHtml(monthStr){
   `;
 }
 function doPrintMonthly(monthStr){
+  prepareThermalPrint();
   document.getElementById('print-area').innerHTML = buildPrintMonthlyHtml(monthStr);
+  setTimeout(()=>window.print(), 50);
+}
+
+function doPrintSelectedA4(ids){
+  if(!ids || !ids.length){ alert('กรุณาเลือกใบเสร็จอย่างน้อย 1 รายการ'); return; }
+  const receipts = ids.map(id=>state.receipts.find(x=>x.id===id)).filter(Boolean);
+  if(!receipts.length){ alert('ไม่พบใบเสร็จที่เลือก'); return; }
+  setPageStyle('@page{ size:A4; margin:10mm; }');
+  const area = document.getElementById('print-area');
+  area.classList.add('mode-a4');
+  area.innerHTML = `<div class="a4-grid">${receipts.map(r=>`<div class="a4-cell">${buildPrintHtml(r)}</div>`).join('')}</div>`;
   setTimeout(()=>window.print(), 50);
 }
 
@@ -945,6 +1000,15 @@ document.addEventListener('click', async (e)=>{
 
   if(action==='histMode'){ state.historyMode = el.dataset.mode; render(); return; }
   if(action==='viewReceipt'){ state.viewId = el.dataset.id; state.tab='detail'; render(); return; }
+  if(action==='toggleSelectMode'){ state.selectMode = !state.selectMode; state.selectedIds = []; render(); return; }
+  if(action==='toggleSelect'){
+    const id = el.dataset.id;
+    const idx = state.selectedIds.indexOf(id);
+    if(idx>-1) state.selectedIds.splice(idx,1); else state.selectedIds.push(id);
+    render();
+    return;
+  }
+  if(action==='printSelectedA4'){ doPrintSelectedA4(state.selectedIds); return; }
   if(action==='backHistory'){ state.tab='history'; render(); return; }
   if(action==='printExisting'){
     const r = state.receipts.find(x=>x.id===el.dataset.id);
