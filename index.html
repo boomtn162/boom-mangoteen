@@ -201,13 +201,14 @@
     }
     #print-area.mode-a4{ width:100%; padding:0; }
   }
-  .a4-page{ width:100%; height:277mm; page-break-after:always; }
+  .a4-page{ width:100%; page-break-after:always; }
   .a4-page:last-child{ page-break-after:auto; }
-  .a4-grid{ display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; height:100%; }
+  .a4-grid{ display:grid; grid-template-columns:1fr 1fr; grid-auto-rows:138.5mm; }
   .a4-cell{
     border:1px dashed #888; padding:6mm; box-sizing:border-box;
-    break-inside:avoid; page-break-inside:avoid; background:#fff; overflow:hidden;
+    height:138.5mm; break-inside:avoid; page-break-inside:avoid; background:#fff; overflow:hidden; position:relative;
   }
+  .a4-cell-inner{ transform-origin:top left; }
   .pr-center{ text-align:center; }
   .pr-title{ font-size:14px; font-weight:700; }
   .pr-sub{ font-size:10.5px; }
@@ -822,6 +823,34 @@ function doPrintMonthly(monthStr){
   setTimeout(()=>window.print(), 50);
 }
 
+let _mmPxRatio = null;
+function mmToPx(mm){
+  if(_mmPxRatio===null){
+    const probe = document.createElement('div');
+    probe.style.cssText = 'position:fixed; left:-9999px; top:0; height:100mm; width:0;';
+    document.body.appendChild(probe);
+    _mmPxRatio = probe.getBoundingClientRect().height/100;
+    document.body.removeChild(probe);
+  }
+  return mm*_mmPxRatio;
+}
+// A4 cell content budget: (297-20mm page margin)/2 rows = 138.5mm tall, minus 6mm padding top+bottom;
+// (210-20mm page margin)/2 cols = 95mm wide, minus 6mm padding left+right.
+const A4_CELL_CONTENT_W_MM = 83;
+const A4_CELL_CONTENT_H_MM = 126;
+
+function scaleToFitA4Cell(contentHtml){
+  const probe = document.createElement('div');
+  probe.style.cssText = `position:fixed; left:-9999px; top:0; width:${A4_CELL_CONTENT_W_MM}mm; font-family:Sarabun,sans-serif; box-sizing:border-box;`;
+  probe.innerHTML = contentHtml;
+  document.body.appendChild(probe);
+  const naturalH = probe.getBoundingClientRect().height;
+  document.body.removeChild(probe);
+  const budgetH = mmToPx(A4_CELL_CONTENT_H_MM);
+  if(naturalH<=budgetH) return 1;
+  return Math.max(budgetH/naturalH, 0.4); // never shrink below 40% (stays legible); extreme cases fall back to the overflow:hidden safety clip
+}
+
 function doPrintSelectedA4(ids){
   if(!ids || !ids.length){ alert('กรุณาเลือกใบเสร็จอย่างน้อย 1 รายการ'); return; }
   const receipts = ids.map(id=>state.receipts.find(x=>x.id===id)).filter(Boolean);
@@ -833,7 +862,12 @@ function doPrintSelectedA4(ids){
   for(let i=0;i<receipts.length;i+=4){ pages.push(receipts.slice(i,i+4)); }
   area.innerHTML = pages.map(pageReceipts=>`
     <div class="a4-page">
-      <div class="a4-grid">${pageReceipts.map(r=>`<div class="a4-cell">${buildPrintHtml(r)}</div>`).join('')}</div>
+      <div class="a4-grid">${pageReceipts.map(r=>{
+        const html = buildPrintHtml(r);
+        const scale = scaleToFitA4Cell(html);
+        const style = scale<1 ? ` style="transform:scale(${scale.toFixed(3)});"` : '';
+        return `<div class="a4-cell"><div class="a4-cell-inner"${style}>${html}</div></div>`;
+      }).join('')}</div>
     </div>`).join('');
   setTimeout(()=>window.print(), 50);
 }
