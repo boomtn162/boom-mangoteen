@@ -277,7 +277,7 @@ const PRESET_MEMBER_NAMES = ["อดใจ","ละออ","มุกดา","�
 
 function defaultConfig(){
   return {
-    groupName:'กลุ่มบูมมังคุดคุณภาพชะอวด',
+    groupName:'กลุ่มบูมมังคุดคุณภาพ',
     groupAddr:'ม.4 ต.เกาะขันธ์ อ.ชะอวด จ.นครศรีธรรมราช',
     groupPhone:'089-879-9939',
     feePerKg:2,
@@ -612,10 +612,7 @@ function renderSettings(){
   </div>`;
 }
 
-function renderHistory(){
-  if(state.historyMode==='daily') return renderDaily();
-  if(state.historyMode==='monthly') return renderMonthly();
-
+function getFilteredReceiptList(){
   const q = state.search.trim().toLowerCase();
   let list = state.receipts.slice().sort((a,b)=>b.createdAt-a.createdAt);
   if(q){
@@ -627,6 +624,14 @@ function renderHistory(){
   }
   if(state.filterFrom) list = list.filter(r=>r.date >= state.filterFrom);
   if(state.filterTo) list = list.filter(r=>r.date <= state.filterTo);
+  return list;
+}
+
+function renderHistory(){
+  if(state.historyMode==='daily') return renderDaily();
+  if(state.historyMode==='monthly') return renderMonthly();
+
+  const list = getFilteredReceiptList();
 
   const filterPanel = `
   <div class="select-bar">
@@ -670,6 +675,7 @@ function renderHistory(){
   ${filterPanel}
   <div class="select-bar">
     <button data-action="toggleSelectMode" class="${state.selectMode?'active':''}">${state.selectMode? '✕ ยกเลิกการเลือก' : '🖨️ เลือกหลายใบพิมพ์ลง A4'}</button>
+    ${state.selectMode? `<button data-action="selectAllVisible" style="margin-top:6px;">${(list.length && list.every(r=>state.selectedIds.includes(r.id)))? 'ยกเลิกเลือกทั้งหมด' : `เลือกทั้งหมด (${list.length} ใบ)`}</button>` : ''}
   </div>
   ${list.length? list.map(r=>{
     const checked = state.selectMode && state.selectedIds.includes(r.id);
@@ -1280,6 +1286,13 @@ document.addEventListener('click', async (e)=>{
   if(action==='clearDateFilter'){ state.filterFrom=''; state.filterTo=''; render(); return; }
   if(action==='viewReceipt'){ state.viewId = el.dataset.id; state.tab='detail'; render(); return; }
   if(action==='toggleSelectMode'){ state.selectMode = !state.selectMode; state.selectedIds = []; render(); return; }
+  if(action==='selectAllVisible'){
+    const visibleIds = getFilteredReceiptList().map(r=>r.id);
+    const allSelected = visibleIds.length && visibleIds.every(id=>state.selectedIds.includes(id));
+    state.selectedIds = allSelected ? [] : visibleIds;
+    render();
+    return;
+  }
   if(action==='toggleSelect'){
     const id = el.dataset.id;
     const idx = state.selectedIds.indexOf(id);
