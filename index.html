@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>POS กลุ่มมังคุดคุณภาพ</title>
+<title>POS กลุ่มมังคุด</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <style>
@@ -232,9 +232,34 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
+// Pre-configured Google Sheets backend - the app connects automatically on first load
+// of any device, no need to paste the link manually. Users can still change/clear it in Settings.
+const DEFAULT_CLOUD_URL = 'https://script.google.com/macros/s/AKfycbyS30NJofUexxXUWqSKladMO3Z4oww45KNftfelltrswFm0s_XvJFLNfr1uFxJJATe5/exec';
+
 const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'', cloudUrl:'', cloudStatus:'idle' };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+// window.storage only exists inside Claude.ai's artifact viewer. When this file is opened
+// directly (downloaded, or added to the home screen for daily use), it's undefined and every
+// save silently fails - nothing persists between opens. Fall back to real localStorage so the
+// app works reliably as a standalone page too.
+const _hasCloudArtifactStorage = (typeof window.storage !== 'undefined' && window.storage);
+async function storageGet(key){
+  if(_hasCloudArtifactStorage){
+    try{ const r = await window.storage.get(key, false); return r ? r.value : null; }
+    catch(e){ return null; }
+  }
+  try{ return localStorage.getItem(key); }catch(e){ return null; }
+}
+async function storageSet(key, value){
+  if(_hasCloudArtifactStorage){
+    try{ await window.storage.set(key, value, false); return; }
+    catch(e){ console.error('artifact storage set failed', e); }
+    return;
+  }
+  try{ localStorage.setItem(key, value); }catch(e){ console.error('localStorage set failed', e); }
+}
 
 // toISOString() returns the UTC date, which is wrong for Thailand (UTC+7) during
 // early morning hours (00:00-06:59 local is still "yesterday" in UTC). Use local
@@ -252,9 +277,9 @@ const PRESET_MEMBER_NAMES = ["อดใจ","ละออ","มุกดา","�
 
 function defaultConfig(){
   return {
-    groupName:'บูมกลุ่มมังคุดคุณภาพ',
+    groupName:'กลุ่มบูมมังคุดคุณภาพชะอวด',
     groupAddr:'ม.4 ต.เกาะขันธ์ อ.ชะอวด จ.นครศรีธรรมราช',
-    groupPhone:'089-8799939',
+    groupPhone:'089-879-9939',
     feePerKg:2,
     nextReceiptNo:1,
     memberNames:PRESET_MEMBER_NAMES.slice(),
@@ -272,16 +297,17 @@ function defaultConfig(){
 
 async function loadData(){
   try{
-    const u = await window.storage.get('pos-cloud-url');
-    state.cloudUrl = u ? u.value : '';
-  }catch(e){ state.cloudUrl=''; }
+    const u = await storageGet('pos-cloud-url');
+    state.cloudUrl = (u!==null && u!==undefined) ? u : DEFAULT_CLOUD_URL;
+    if(u===null || u===undefined) await storageSet('pos-cloud-url', state.cloudUrl); // persist the default so it's explicit from now on
+  }catch(e){ state.cloudUrl = DEFAULT_CLOUD_URL; }
   try{
-    const c = await window.storage.get('pos-config');
-    state.config = c ? JSON.parse(c.value) : defaultConfig();
+    const c = await storageGet('pos-config');
+    state.config = c ? JSON.parse(c) : defaultConfig();
   }catch(e){ state.config = defaultConfig(); }
   try{
-    const r = await window.storage.get('pos-receipts');
-    state.receipts = r ? JSON.parse(r.value) : [];
+    const r = await storageGet('pos-receipts');
+    state.receipts = r ? JSON.parse(r) : [];
   }catch(e){ state.receipts = []; }
   const needsSave = migrateData();
   if(needsSave.config) await saveConfig();
@@ -365,17 +391,17 @@ function migrateData(){
   return {config:configChanged, receipts:receiptsChanged};
 }
 async function saveConfig(){
-  try{ await window.storage.set('pos-config', JSON.stringify(state.config), false); }
+  try{ await storageSet('pos-config', JSON.stringify(state.config)); }
   catch(e){ console.error('save config failed', e); }
   pushConfigToCloudDebounced();
 }
 async function saveReceiptsList(){
-  try{ await window.storage.set('pos-receipts', JSON.stringify(state.receipts), false); }
+  try{ await storageSet('pos-receipts', JSON.stringify(state.receipts)); }
   catch(e){ console.error('save receipts failed', e); }
 }
 async function saveCloudUrl(url){
   state.cloudUrl = (url||'').trim();
-  try{ await window.storage.set('pos-cloud-url', state.cloudUrl, false); }
+  try{ await storageSet('pos-cloud-url', state.cloudUrl); }
   catch(e){ console.error('save cloud url failed', e); }
 }
 
