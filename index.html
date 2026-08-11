@@ -74,12 +74,15 @@
   }
   .card h2{ font-size:14px; margin:0 0 10px; color:var(--primary-dark); font-weight:700; }
   label{ display:block; font-size:12px; color:var(--ink-soft); margin-bottom:4px; font-weight:600; }
-  input[type=text], input[type=number], input[type=date]{
+  input[type=text], input[type=number], input[type=date], input[type=month]{
     width:100%; padding:10px 11px; border:1.5px solid var(--border); border-radius:9px;
     font-family:inherit; font-size:15px; background:#fff; color:var(--ink);
   }
-  input[type=text]:focus, input[type=number]:focus, input[type=date]:focus{
+  input[type=text]:focus, input[type=number]:focus, input[type=date]:focus, input[type=month]:focus{
     outline:none; border-color:var(--primary);
+  }
+  input[type=date], input[type=month]{
+    padding:8px 9px; font-size:13.5px; max-width:180px;
   }
   .field{ margin-bottom:10px; }
   .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
@@ -229,7 +232,7 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[] };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'' };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -245,13 +248,16 @@ function todayLocalMonth(){
   return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
 }
 
+const PRESET_MEMBER_NAMES = ["อดใจ","ละออ","มุกดา","กาญจนา","เจษฎาพร","สมศรี","สาว","ประคอง","อุไร","อุบล","สายชล","ประนอม","อำนวย","เรืองฤทธิ์","สุพัตรา","ภักดี","ไพศาล","อัญชลี","วิภาวดี","เมทยา","นิรชา","เยาวรัตน์"];
+
 function defaultConfig(){
   return {
-    groupName:'บูมกลุ่มมังคุดคุณภาพชะอวด',
+    groupName:'บูมกลุ่มมังคุดคุณภาพ',
     groupAddr:'ม.4 ต.เกาะขันธ์ อ.ชะอวด จ.นครศรีธรรมราช',
     groupPhone:'089-8799939',
     feePerKg:2,
     nextReceiptNo:1,
+    memberNames:PRESET_MEMBER_NAMES.slice(),
     grades:[
       {id:uid(), name:'เบอร์ 1', price:0},
       {id:uid(), name:'เบอร์ 2', price:0},
@@ -283,6 +289,7 @@ async function loadData(){
 function migrateData(){
   let configChanged=false, receiptsChanged=false;
   if(state.config.nextReceiptNo===undefined){ state.config.nextReceiptNo=1; configChanged=true; }
+  if(state.config.memberNames===undefined){ state.config.memberNames = PRESET_MEMBER_NAMES.slice(); configChanged=true; }
   state.config.grades.forEach(g=>{
     if(g.price===undefined){ g.price = g.lastPrice!==undefined? g.lastPrice : 0; configChanged=true; }
     if(g.lastPrice!==undefined){ delete g.lastPrice; configChanged=true; }
@@ -375,7 +382,7 @@ function renderHeader(){
 function renderNew(){
   const d = state.draft;
   const t = draftTotals(d);
-  const owners = [...new Set(state.receipts.map(r=>r.ownerName))];
+  const owners = [...new Set([...(state.config.memberNames||[]), ...state.receipts.map(r=>r.ownerName)])].sort((a,b)=>a.localeCompare(b,'th'));
   return `
   ${d.editingId? `
   <div class="card" style="background:#FFF6E9;border-color:var(--accent-gold);">
@@ -456,6 +463,12 @@ function renderSettings(){
   </div>
 
   <div class="card">
+    <h2>รายชื่อสมาชิกที่ใช้บ่อย</h2>
+    <p style="font-size:12px;color:var(--ink-soft);margin:-4px 0 10px;">ชื่อเหล่านี้จะขึ้นให้เลือกอัตโนมัติเวลาพิมพ์ชื่อเจ้าของสวนในหน้าบันทึกใบเสร็จ ไม่ต้องพิมพ์ใหม่ทุกครั้ง คั่นแต่ละชื่อด้วยจุลภาค (,) เพิ่ม/ลบชื่อได้ตามต้องการ</p>
+    <textarea data-cfg="memberNames" rows="5" style="width:100%;padding:10px 11px;border:1.5px solid var(--border);border-radius:9px;font-family:inherit;font-size:14px;resize:vertical;">${escapeAttr((c.memberNames||[]).join(', '))}</textarea>
+  </div>
+
+  <div class="card">
     <h2>ค่าบริการเริ่มต้น (บาท/กก.)</h2>
     <input type="number" step="0.01" min="0" data-cfg="feePerKg" value="${c.feePerKg}" style="max-width:120px">
   </div>
@@ -494,7 +507,28 @@ function renderHistory(){
 
   const q = state.search.trim().toLowerCase();
   let list = state.receipts.slice().sort((a,b)=>b.createdAt-a.createdAt);
-  if(q) list = list.filter(r=>r.ownerName.toLowerCase().includes(q));
+  if(q){
+    list = list.filter(r=>{
+      const nameMatch = r.ownerName.toLowerCase().includes(q);
+      const noMatch = formatReceiptNo(r.receiptNo).toLowerCase().includes(q) || String(r.receiptNo||'').includes(q);
+      return nameMatch || noMatch;
+    });
+  }
+  if(state.filterFrom) list = list.filter(r=>r.date >= state.filterFrom);
+  if(state.filterTo) list = list.filter(r=>r.date <= state.filterTo);
+
+  const filterPanel = `
+  <div class="select-bar">
+    <button data-action="toggleDateFilter" class="${state.showDateFilter?'active':''}">📅 ${state.showDateFilter? 'ซ่อนตัวกรองวันที่':'กรองตามช่วงวันที่'}</button>
+  </div>
+  ${state.showDateFilter? `
+  <div class="card">
+    <div class="row2">
+      <div class="field"><label>จากวันที่</label><input type="date" data-field="filterFrom" value="${state.filterFrom||''}"></div>
+      <div class="field"><label>ถึงวันที่</label><input type="date" data-field="filterTo" value="${state.filterTo||''}"></div>
+    </div>
+    ${(state.filterFrom||state.filterTo)? `<button class="btn ghost small" data-action="clearDateFilter" style="width:100%;">ล้างตัวกรองวันที่</button>` : ''}
+  </div>` : ''}`;
 
   if(state.historyMode==='members'){
     const map={};
@@ -504,8 +538,9 @@ function renderHistory(){
     });
     const members = Object.values(map).sort((a,b)=>b.net-a.net);
     return `
-    <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน" data-action="search" value="${escapeAttr(state.search)}"></div>
+    <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน หรือเลขที่ใบเสร็จ" data-action="search" value="${escapeAttr(state.search)}"></div>
     ${toggleRow()}
+    ${filterPanel}
     ${members.length? members.map(m=>`
       <div class="member-card">
         <div class="name">${escapeHtml(m.name)}</div>
@@ -519,8 +554,9 @@ function renderHistory(){
   }
 
   return `
-  <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน" data-action="search" value="${escapeAttr(state.search)}"></div>
+  <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน หรือเลขที่ใบเสร็จ" data-action="search" value="${escapeAttr(state.search)}"></div>
   ${toggleRow()}
+  ${filterPanel}
   <div class="select-bar">
     <button data-action="toggleSelectMode" class="${state.selectMode?'active':''}">${state.selectMode? '✕ ยกเลิกการเลือก' : '🖨️ เลือกหลายใบพิมพ์ลง A4'}</button>
   </div>
@@ -534,7 +570,7 @@ function renderHistory(){
         <div class="sub-line"><span>${fmtNum(r.totalWeight)} กก.</span><span class="val">${fmtNum(r.net)} บาท</span></div>
       </div>
     </div>`;
-  }).join('') : `<div class="empty">ยังไม่มีใบเสร็จที่บันทึกไว้</div>`}
+  }).join('') : `<div class="empty">ไม่พบใบเสร็จที่ตรงกับตัวกรอง</div>`}
   ${state.selectMode && state.selectedIds.length? `
   <div class="card summary-card" style="position:sticky; bottom:12px; z-index:5;">
     <div class="srow"><span>เลือกไว้พิมพ์</span><span class="val num">${state.selectedIds.length} ใบ</span></div>
@@ -1079,7 +1115,14 @@ document.addEventListener('click', async (e)=>{
   if(!el) return;
   const action = el.dataset.action;
 
-  if(action==='tab'){ state.tab = el.dataset.tab; render(); return; }
+  if(action==='tab'){
+    state.tab = el.dataset.tab;
+    if(state.tab==='new' && state.draft && !state.draft.editingId && !state.draft.ownerName && !state.draft.grades.some(g=>g.entries.length)){
+      state.draft.date = todayLocalISO();
+    }
+    render();
+    return;
+  }
   if(action==='clearDraft'){ if(confirm('ล้างข้อมูลใบเสร็จปัจจุบัน?')){ resetDraft(); render(); } return; }
   if(action==='saveReceipt'){ await saveReceipt(); return; }
   if(action==='cancelEdit'){
@@ -1114,6 +1157,8 @@ document.addEventListener('click', async (e)=>{
   }
 
   if(action==='histMode'){ state.historyMode = el.dataset.mode; render(); return; }
+  if(action==='toggleDateFilter'){ state.showDateFilter = !state.showDateFilter; render(); return; }
+  if(action==='clearDateFilter'){ state.filterFrom=''; state.filterTo=''; render(); return; }
   if(action==='viewReceipt'){ state.viewId = el.dataset.id; state.tab='detail'; render(); return; }
   if(action==='toggleSelectMode'){ state.selectMode = !state.selectMode; state.selectedIds = []; render(); return; }
   if(action==='toggleSelect'){
@@ -1188,6 +1233,8 @@ document.addEventListener('input', (e)=>{
   if(t.dataset.field==='date'){ state.draft.date = t.value; return; }
   if(t.dataset.field==='feePerKg'){ state.draft.feePerKg = parseFloat(t.value)||0; refreshSummaryOnly(); return; }
   if(t.dataset.action==='search'){ state.search = t.value; render(); return; }
+  if(t.dataset.field==='filterFrom'){ state.filterFrom = t.value; render(); return; }
+  if(t.dataset.field==='filterTo'){ state.filterTo = t.value; render(); return; }
   if(t.dataset.action==='reportDate'){ state.reportDate = t.value; render(); return; }
   if(t.dataset.action==='reportMonth'){ state.reportMonth = t.value; render(); return; }
   if(t.dataset.action==='gradeName'){
@@ -1198,6 +1245,11 @@ document.addEventListener('input', (e)=>{
   if(t.dataset.action==='gradePrice'){
     const g = state.config.grades.find(x=>x.id===t.dataset.grade);
     if(g){ g.price = parseFloat(t.value)||0; saveConfig(); }
+    return;
+  }
+  if(t.dataset.cfg==='memberNames'){
+    state.config.memberNames = t.value.split(/[,\n]+/).map(s=>s.trim()).filter(Boolean);
+    saveConfig();
     return;
   }
   if(t.dataset.cfg){
