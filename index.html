@@ -1377,7 +1377,14 @@ document.addEventListener('input', (e)=>{
   if(t.dataset.field==='ownerName'){ state.draft.ownerName = t.value; return; }
   if(t.dataset.field==='date'){ state.draft.date = t.value; return; }
   if(t.dataset.field==='feePerKg'){ state.draft.feePerKg = parseFloat(t.value)||0; refreshSummaryOnly(); return; }
-  if(t.dataset.action==='search'){ state.search = t.value; render(); return; }
+  if(t.dataset.action==='search'){
+    const cursorPos = t.selectionStart;
+    state.search = t.value;
+    render();
+    const freshInput = document.querySelector('[data-action="search"]');
+    if(freshInput){ freshInput.focus(); freshInput.setSelectionRange(cursorPos, cursorPos); }
+    return;
+  }
   if(t.dataset.field==='filterFrom'){ state.filterFrom = t.value; render(); return; }
   if(t.dataset.field==='filterTo'){ state.filterTo = t.value; render(); return; }
   if(t.dataset.action==='reportDate'){ state.reportDate = t.value; render(); return; }
