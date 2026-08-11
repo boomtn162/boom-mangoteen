@@ -232,7 +232,7 @@
 
 <script>
 /* ---------------- State & storage ---------------- */
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'' };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportMonth:todayLocalMonth(), selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'', cloudUrl:'', cloudStatus:'idle' };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -252,9 +252,9 @@ const PRESET_MEMBER_NAMES = ["อดใจ","ละออ","มุกดา","�
 
 function defaultConfig(){
   return {
-    groupName:'บูมกลุ่มมังคุดคุณภาพชะอวด',
+    groupName:'บูมกลุ่มมังคุดคุณภาพ',
     groupAddr:'ม.4 ต.เกาะขันธ์ อ.ชะอวด จ.นครศรีธรรมราช',
-    groupPhone:'089-879-9939',
+    groupPhone:'089-8799939',
     feePerKg:2,
     nextReceiptNo:1,
     memberNames:PRESET_MEMBER_NAMES.slice(),
@@ -272,6 +272,10 @@ function defaultConfig(){
 
 async function loadData(){
   try{
+    const u = await window.storage.get('pos-cloud-url');
+    state.cloudUrl = u ? u.value : '';
+  }catch(e){ state.cloudUrl=''; }
+  try{
     const c = await window.storage.get('pos-config');
     state.config = c ? JSON.parse(c.value) : defaultConfig();
   }catch(e){ state.config = defaultConfig(); }
@@ -284,6 +288,64 @@ async function loadData(){
   if(needsSave.receipts) await saveReceiptsList();
   resetDraft();
   render();
+  if(state.cloudUrl) syncFromCloud();
+}
+
+/* ---------------- Cloud sync (Google Sheets via Apps Script) ---------------- */
+async function cloudGet(action){
+  const res = await fetch(state.cloudUrl+'?action='+action, {method:'GET'});
+  const data = await res.json();
+  if(data && data.error) throw new Error(data.error);
+  return data;
+}
+async function cloudPost(payload){
+  const res = await fetch(state.cloudUrl, {
+    method:'POST',
+    headers:{'Content-Type':'text/plain;charset=utf-8'}, // avoids CORS preflight, which Apps Script doesn't handle
+    body:JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if(data && data.error) throw new Error(data.error);
+  return data;
+}
+
+async function syncFromCloud(){
+  if(!state.cloudUrl) return;
+  state.cloudStatus = 'syncing';
+  render();
+  try{
+    const [cloudConfig, cloudReceipts] = await Promise.all([cloudGet('getConfig'), cloudGet('getReceipts')]);
+    if(cloudConfig && Object.keys(cloudConfig).length){
+      state.config = {...state.config, ...cloudConfig};
+      await saveConfig();
+    } else if(Object.keys(state.config).length){
+      // sheet is empty (first-time setup) - push our current local config up
+      await cloudPost({action:'saveConfig', config:state.config});
+    }
+    if(Array.isArray(cloudReceipts)){
+      state.receipts = cloudReceipts;
+      await saveReceiptsList();
+    }
+    const needsSave = migrateData();
+    if(needsSave.config) await saveConfig();
+    if(needsSave.receipts) await saveReceiptsList();
+    resetDraft();
+    state.cloudStatus = 'connected';
+  }catch(e){
+    console.error('cloud sync failed', e);
+    state.cloudStatus = 'error';
+  }
+  render();
+}
+
+let _cloudConfigDebounce = null;
+function pushConfigToCloudDebounced(){
+  if(!state.cloudUrl) return;
+  if(_cloudConfigDebounce) clearTimeout(_cloudConfigDebounce);
+  _cloudConfigDebounce = setTimeout(async ()=>{
+    try{ await cloudPost({action:'saveConfig', config:state.config}); state.cloudStatus='connected'; }
+    catch(e){ console.error('cloud config push failed', e); state.cloudStatus='error'; showToastTemp('บันทึกตั้งค่าขึ้น Google Sheets ไม่สำเร็จ (บันทึกในเครื่องแล้ว)'); }
+  }, 800);
 }
 
 function migrateData(){
@@ -305,10 +367,16 @@ function migrateData(){
 async function saveConfig(){
   try{ await window.storage.set('pos-config', JSON.stringify(state.config), false); }
   catch(e){ console.error('save config failed', e); }
+  pushConfigToCloudDebounced();
 }
 async function saveReceiptsList(){
   try{ await window.storage.set('pos-receipts', JSON.stringify(state.receipts), false); }
   catch(e){ console.error('save receipts failed', e); }
+}
+async function saveCloudUrl(url){
+  state.cloudUrl = (url||'').trim();
+  try{ await window.storage.set('pos-cloud-url', state.cloudUrl, false); }
+  catch(e){ console.error('save cloud url failed', e); }
 }
 
 function resetDraft(){
@@ -454,7 +522,24 @@ function renderNew(){
 
 function renderSettings(){
   const c = state.config;
+  const statusLabel = {
+    idle: state.cloudUrl? '⏸ ยังไม่ซิงค์' : '⚪ ยังไม่ได้เชื่อมต่อ',
+    syncing: '🔄 กำลังซิงค์...',
+    connected: '🟢 เชื่อมต่อแล้ว ข้อมูลซิงค์กับ Google Sheets',
+    error: '🔴 เชื่อมต่อไม่สำเร็จ ตรวจสอบลิงก์อีกครั้ง'
+  }[state.cloudStatus] || '';
   return `
+  <div class="card">
+    <h2>เชื่อมต่อฐานข้อมูล Google Sheets</h2>
+    <p style="font-size:12px;color:var(--ink-soft);margin:-4px 0 10px;">วางลิงก์ Web App จาก Google Apps Script ที่นี่ เพื่อให้ข้อมูลของกลุ่มซิงค์ขึ้น Google Sheets และใช้งานร่วมกันได้หลายเครื่อง (ดูวิธีตั้งค่าในไฟล์ google-sheets-backend.gs.txt ที่ให้ไว้)</p>
+    <div class="field"><label>Web App URL</label><input type="text" id="cloudUrlInput" placeholder="https://script.google.com/macros/s/.../exec" value="${escapeAttr(state.cloudUrl)}"></div>
+    <div class="actions" style="margin:6px 0 0;">
+      <button class="btn ghost" data-action="saveCloudUrl">บันทึกลิงก์</button>
+      <button class="btn primary" data-action="syncNow">ซิงค์ตอนนี้</button>
+    </div>
+    ${state.cloudUrl? `<p style="font-size:12.5px;margin:10px 0 0;color:var(--ink-soft);">${statusLabel}</p>` : ''}
+  </div>
+
   <div class="card">
     <h2>ข้อมูลกลุ่ม (แสดงบนใบเสร็จ)</h2>
     <div class="field"><label>ชื่อกลุ่ม</label><input type="text" data-cfg="groupName" value="${escapeAttr(c.groupName)}"></div>
@@ -879,6 +964,12 @@ function hideToast(){
   const t = document.getElementById('toast');
   if(t) t.style.display = 'none';
 }
+let _toastTimer = null;
+function showToastTemp(msg, ms){
+  showToast(msg);
+  if(_toastTimer) clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(hideToast, ms||3200);
+}
 
 // Scales a receipt's content down (never up) so it fits entirely within its slip/cell area,
 // measured live in the real DOM so font metrics are accurate.
@@ -1065,6 +1156,7 @@ async function saveReceipt(){
     };
     state.receipts[idx] = updated;
     await saveReceiptsList();
+    if(state.cloudUrl){ cloudPost({action:'updateReceipt', receipt:updated}).catch(e=>{ console.error('cloud update failed',e); showToastTemp('อัปเดตขึ้น Google Sheets ไม่สำเร็จ (บันทึกในเครื่องแล้ว)'); }); }
     resetDraft();
     state.viewId = updated.id;
     state.tab = 'detail';
@@ -1086,6 +1178,7 @@ async function saveReceipt(){
   state.config.nextReceiptNo = (state.config.nextReceiptNo||1) + 1;
   await saveReceiptsList();
   await saveConfig();
+  if(state.cloudUrl){ cloudPost({action:'addReceipt', receipt}).catch(e=>{ console.error('cloud add failed',e); showToastTemp('บันทึกขึ้น Google Sheets ไม่สำเร็จ (บันทึกในเครื่องแล้ว)'); }); }
 
   resetDraft();
   doPrint(receipt);
@@ -1185,10 +1278,23 @@ document.addEventListener('click', async (e)=>{
   if(action==='printMonthly'){ doPrintMonthly(el.dataset.month); return; }
   if(action==='exportMonthlyCsv'){ exportMonthlyCsv(el.dataset.month); return; }
   if(action==='exportBackup'){ exportBackup(); return; }
+  if(action==='saveCloudUrl'){
+    const input = document.getElementById('cloudUrlInput');
+    await saveCloudUrl(input.value);
+    if(state.cloudUrl){ await syncFromCloud(); } else { render(); }
+    return;
+  }
+  if(action==='syncNow'){
+    if(!state.cloudUrl){ alert('กรุณาวางลิงก์ Web App แล้วกด "บันทึกลิงก์" ก่อน'); return; }
+    await syncFromCloud();
+    return;
+  }
   if(action==='deleteReceipt'){
     if(confirm('ยืนยันการลบใบเสร็จนี้? ไม่สามารถกู้คืนได้')){
-      state.receipts = state.receipts.filter(x=>x.id!==el.dataset.id);
+      const delId = el.dataset.id;
+      state.receipts = state.receipts.filter(x=>x.id!==delId);
       await saveReceiptsList();
+      if(state.cloudUrl){ cloudPost({action:'deleteReceipt', id:delId}).catch(e=>{ console.error('cloud delete failed',e); showToastTemp('ลบขึ้น Google Sheets ไม่สำเร็จ (ลบในเครื่องแล้ว)'); }); }
       state.tab='history'; render();
     }
     return;
