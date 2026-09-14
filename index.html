@@ -252,6 +252,13 @@
   .pr-a4-empty{ font-size:12px; color:#666; padding:6px 0; }
   .pr-a4-foot{ margin-top:4mm; font-size:9.5px; color:#777; text-align:right; }
 
+  /* A4 season summary - three big-number stat boxes above the grade table */
+  .pr-a4-stats{ display:flex; gap:8mm; margin:4mm 0; }
+  .pr-a4-stats .box{ flex:1; text-align:center; border:1px solid #999; border-radius:2mm; padding:3mm 2mm; }
+  .pr-a4-stats .box .big{ font-size:22px; font-weight:700; font-family:'JetBrains Mono',monospace; }
+  .pr-a4-stats .box .lbl{ font-size:10.5px; color:#333; margin-top:1mm; }
+  .pr-a4-stats .box .sub{ font-size:9.5px; color:#777; margin-top:0.5mm; }
+
   @media (min-width:560px){
     main{ padding:0; }
   }
@@ -268,7 +275,7 @@
 // of any device, no need to paste the link manually. Users can still change/clear it in Settings.
 const DEFAULT_CLOUD_URL = 'https://script.google.com/macros/s/AKfycbyS30NJofUexxXUWqSKladMO3Z4oww45KNftfelltrswFm0s_XvJFLNfr1uFxJJATe5/exec';
 
-const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportFrom:firstDayOfMonthISO(), reportTo:todayLocalISO(), selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'', cloudUrl:'', cloudStatus:'idle' };
+const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, historyMode:'list', search:'', reportDate:todayLocalISO(), reportFrom:firstDayOfMonthISO(), reportTo:todayLocalISO(), seasonFrom:'', seasonTo:'', selectMode:false, selectedIds:[], showDateFilter:false, filterFrom:'', filterTo:'', cloudUrl:'', cloudStatus:'idle' };
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
@@ -661,6 +668,7 @@ function getFilteredReceiptList(){
 function renderHistory(){
   if(state.historyMode==='daily') return renderDaily();
   if(state.historyMode==='monthly') return renderMonthly();
+  if(state.historyMode==='season') return renderSeason();
 
   const list = getFilteredReceiptList();
 
@@ -734,7 +742,20 @@ function toggleRow(){
     <button data-action="histMode" data-mode="members" class="${state.historyMode==='members'?'active':''}">สรุปรายบุคคล</button>
     <button data-action="histMode" data-mode="daily" class="${state.historyMode==='daily'?'active':''}">รายงานประจำวัน</button>
     <button data-action="histMode" data-mode="monthly" class="${state.historyMode==='monthly'?'active':''}">รายงานรายเดือน</button>
+    <button data-action="histMode" data-mode="season" class="${state.historyMode==='season'?'active':''}">สรุปประจำฤดู</button>
   </div>`;
+}
+
+// Default season range: the earliest to latest receipt date on file, so the
+// report is meaningful the moment it's opened, before the user narrows it.
+function seasonDefaultRange(){
+  if(!state.receipts.length) return {from:todayLocalISO(), to:todayLocalISO()};
+  const dates = state.receipts.map(r=>r.date).sort();
+  return {from:dates[0], to:dates[dates.length-1]};
+}
+function seasonRange(){
+  const def = seasonDefaultRange();
+  return { from: state.seasonFrom || def.from, to: state.seasonTo || def.to };
 }
 
 function computeDaily(dateStr){
@@ -857,6 +878,66 @@ function renderMonthly(){
     <button class="btn ghost" data-action="exportMonthlyCsv" data-from="${fromDate}" data-to="${toDate}">Export CSV</button>
     <button class="btn primary" data-action="printMonthly" data-from="${fromDate}" data-to="${toDate}">พิมพ์รายงาน</button>
   </div>` : ''}
+  `;
+}
+
+function computeSeason(fromStr, toStr){
+  const receipts = state.receipts
+    .filter(r=> (!fromStr || r.date>=fromStr) && (!toStr || r.date<=toStr))
+    .sort((a,b)=>a.createdAt-b.createdAt);
+  const gradeTotals = {};
+  let totalWeight=0, totalAmount=0, totalFee=0, totalNet=0;
+  receipts.forEach(r=>{
+    totalWeight+=r.totalWeight; totalAmount+=r.totalAmount; totalFee+=r.fee; totalNet+=r.net;
+    r.grades.forEach(g=>{
+      if(g.weight<=0) return;
+      if(!gradeTotals[g.name]) gradeTotals[g.name]={weight:0, amount:0};
+      gradeTotals[g.name].weight+=g.weight; gradeTotals[g.name].amount+=g.amount;
+    });
+  });
+  const dayCount = new Set(receipts.map(r=>r.date)).size;
+  const avgPrice = totalWeight>0 ? totalAmount/totalWeight : 0;
+  return {receipts, gradeTotals, totalWeight, totalAmount, totalFee, totalNet, dayCount, avgPrice};
+}
+
+function renderSeason(){
+  const {from, to} = seasonRange();
+  const rep = computeSeason(from, to);
+  const gradeNames = Object.keys(rep.gradeTotals);
+  return `
+  <div class="card hist-search"><input type="text" placeholder="ค้นหาชื่อเจ้าของสวน" data-action="search" value="${escapeAttr(state.search)}"></div>
+  ${toggleRow()}
+  <div class="card">
+    <h2>เลือกช่วงวันที่ของฤดูกาล</h2>
+    <div class="row2">
+      <div class="field"><label>จากวันที่</label><input type="date" data-action="seasonFrom" value="${from}" max="${to}"></div>
+      <div class="field"><label>ถึงวันที่</label><input type="date" data-action="seasonTo" value="${to}" min="${from}"></div>
+    </div>
+  </div>
+  ${rep.receipts.length? `
+  <div class="card summary-card">
+    <div class="srow"><span>จำนวนวันที่รับซื้อ</span><span class="val num">${rep.dayCount} วัน</span></div>
+    <div class="srow"><span>น้ำหนักรวมทั้งหมด</span><span class="val num">${fmtNum(rep.totalWeight)} กก.</span></div>
+    <div class="srow"><span>เงินที่จ่ายทั้งหมด</span><span class="val num">${fmtNum(rep.totalAmount)} บาท</span></div>
+    <div class="srow"><span>ราคาเฉลี่ยทั้งฤดู</span><span class="val num">${fmtNum(rep.avgPrice)} บ./กก.</span></div>
+    <div class="srow net"><span>สุทธิรวมทั้งฤดู</span><span class="val num">${fmtNum(rep.totalNet)} บาท</span></div>
+  </div>
+  <div class="card">
+    <h2>แยกตามเบอร์ — เบอร์ไหนทำเงินได้มากที่สุด</h2>
+    ${gradeNames.map(name=>{
+      const g = rep.gradeTotals[name];
+      const pct = rep.totalAmount>0 ? (g.amount/rep.totalAmount*100) : 0;
+      return `
+      <div class="grade-foot" style="border-top:1px dashed var(--border);padding-top:8px;margin-top:4px;">
+        <span>${escapeHtml(name)}</span>
+        <span class="num">${fmtNum(g.weight)} กก. • ${fmtNum(g.amount)} บาท • ${pct.toFixed(1)}%</span>
+      </div>`;
+    }).join('')}
+  </div>
+  <div class="actions">
+    <button class="btn ghost" data-action="exportSeasonCsv" data-from="${from}" data-to="${to}">Export CSV</button>
+    <button class="btn primary" data-action="printSeason" data-from="${from}" data-to="${to}">พิมพ์รายงาน</button>
+  </div>` : `<div class="card"><div class="empty">ไม่มีข้อมูลในช่วงวันที่ที่เลือก</div></div>`}
   `;
 }
 
@@ -1076,6 +1157,60 @@ function doPrintMonthly(fromDate, toDate){
   window.print();
 }
 
+function buildPrintSeasonHtml(fromStr, toStr){
+  const rep = computeSeason(fromStr, toStr);
+  const gradeNames = Object.keys(rep.gradeTotals);
+  const tons = rep.totalWeight/1000;
+  const millionBaht = rep.totalAmount/1000000;
+  return `
+  <div class="pr-a4-head">
+    <div class="name">${escapeHtml(state.config.groupName)}</div>
+    <div class="addr">${escapeHtml(state.config.groupAddr)} • โทร ${escapeHtml(state.config.groupPhone)}</div>
+    <div class="rtitle">สรุปข้อมูลประจำฤดู</div>
+    <div class="rsub">ช่วงวันที่ ${formatDateRangeThai(fromStr, toStr)} (มีการรับซื้อทั้งหมด ${rep.dayCount} วัน)</div>
+  </div>
+
+  <div class="pr-a4-stats">
+    <div class="box">
+      <div class="big">${fmtNum(rep.totalWeight)}</div>
+      <div class="lbl">ยอดผลผลิตที่รวบรวมได้ทั้งหมด (กิโลกรัม)</div>
+      <div class="sub">หรือราว ${fmtNum(tons)} ตัน</div>
+    </div>
+    <div class="box">
+      <div class="big">${fmtNum(rep.totalAmount)}</div>
+      <div class="lbl">ยอดเงินที่จ่ายทั้งหมด (บาท)</div>
+      <div class="sub">หรือราว ${fmtNum(millionBaht)} ล้านบาท</div>
+    </div>
+    <div class="box">
+      <div class="big">${fmtNum(rep.avgPrice)}</div>
+      <div class="lbl">ราคาเฉลี่ยที่จ่ายทั้งหมด (บาท/กก.)</div>
+      <div class="sub">เฉลี่ยทั้งฤดู ทุกเบอร์รวมกัน</div>
+    </div>
+  </div>
+
+  <div class="pr-a4-section-title">แยกตามเบอร์ — เบอร์ไหนทำเงินได้มากที่สุด</div>
+  ${gradeNames.length? `
+  <table class="pr-a4-table">
+    <thead><tr><th>เบอร์</th><th class="num">น้ำหนัก (กก.)</th><th class="num">เงินได้ (บาท)</th><th class="num">ราคาเฉลี่ย (บาท/กก.)</th><th class="num">คิดเป็น % เงินได้</th></tr></thead>
+    <tbody>
+      ${gradeNames.map(name=>{
+        const g = rep.gradeTotals[name];
+        const avg = g.weight>0 ? g.amount/g.weight : 0;
+        const pct = rep.totalAmount>0 ? (g.amount/rep.totalAmount*100) : 0;
+        return `<tr><td>${escapeHtml(name)}</td><td class="num">${fmtNum(g.weight)}</td><td class="num">${fmtNum(g.amount)}</td><td class="num">${fmtNum(avg)}</td><td class="num">${pct.toFixed(1)}%</td></tr>`;
+      }).join('')}
+    </tbody>
+    <tfoot><tr><td>รวมทั้งหมด</td><td class="num">${fmtNum(rep.totalWeight)}</td><td class="num">${fmtNum(rep.totalAmount)}</td><td class="num">${fmtNum(rep.avgPrice)}</td><td class="num">100.0%</td></tr></tfoot>
+  </table>` : `<div class="pr-a4-empty">ไม่มีข้อมูลในช่วงวันที่ที่เลือก</div>`}
+  <div class="pr-a4-foot">พิมพ์เมื่อ ${formatThaiDate(todayLocalISO())}</div>
+  `;
+}
+function doPrintSeason(fromStr, toStr){
+  prepareA4ReportPrint();
+  document.getElementById('print-area').innerHTML = buildPrintSeasonHtml(fromStr, toStr);
+  window.print();
+}
+
 function showToast(msg){
   let t = document.getElementById('toast');
   if(!t){ t=document.createElement('div'); t.id='toast'; document.body.appendChild(t); }
@@ -1190,6 +1325,32 @@ function exportMonthlyCsv(fromDate, toDate){
     const a = document.createElement('a');
     const stamp = fromDate===toDate ? fromDate : `${fromDate}_ถึง_${toDate}`;
     a.href = url; a.download = `รายงานเดือน-${stamp}.csv`;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }catch(e){ alert('ไม่สามารถดาวน์โหลดไฟล์ในอุปกรณ์นี้ได้ ลองใช้ปุ่มพิมพ์รายงานแทน'); }
+}
+
+function exportSeasonCsv(fromStr, toStr){
+  const rep = computeSeason(fromStr, toStr);
+  const gradeNames = Object.keys(rep.gradeTotals);
+  if(!gradeNames.length){ alert('ไม่มีข้อมูลในช่วงวันที่ที่เลือก'); return; }
+  let csv = `สรุปข้อมูลประจำฤดู ${fromStr} ถึง ${toStr}\n`;
+  csv += `จำนวนวันที่รับซื้อ,${rep.dayCount}\n\n`;
+  csv += 'เบอร์,น้ำหนัก(กก.),เงินได้(บาท),ราคาเฉลี่ย(บาท/กก.),% เงินได้\n';
+  gradeNames.forEach(name=>{
+    const g = rep.gradeTotals[name];
+    const avg = g.weight>0 ? g.amount/g.weight : 0;
+    const pct = rep.totalAmount>0 ? (g.amount/rep.totalAmount*100) : 0;
+    csv += `"${name.replace(/"/g,'""')}",${g.weight},${g.amount},${avg.toFixed(2)},${pct.toFixed(1)}%\n`;
+  });
+  csv += `รวมทั้งหมด,${rep.totalWeight},${rep.totalAmount},${rep.avgPrice.toFixed(2)},100.0%\n`;
+
+  try{
+    const blob = new Blob(["\uFEFF"+csv], {type:'text/csv;charset=utf-8;'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const stamp = fromStr===toStr ? fromStr : `${fromStr}_ถึง_${toStr}`;
+    a.href = url; a.download = `สรุปฤดู-${stamp}.csv`;
     document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }catch(e){ alert('ไม่สามารถดาวน์โหลดไฟล์ในอุปกรณ์นี้ได้ ลองใช้ปุ่มพิมพ์รายงานแทน'); }
@@ -1413,6 +1574,8 @@ document.addEventListener('click', async (e)=>{
   if(action==='exportCsv'){ exportCsv(el.dataset.date); return; }
   if(action==='printMonthly'){ doPrintMonthly(el.dataset.from, el.dataset.to); return; }
   if(action==='exportMonthlyCsv'){ exportMonthlyCsv(el.dataset.from, el.dataset.to); return; }
+  if(action==='printSeason'){ doPrintSeason(el.dataset.from, el.dataset.to); return; }
+  if(action==='exportSeasonCsv'){ exportSeasonCsv(el.dataset.from, el.dataset.to); return; }
   if(action==='exportBackup'){ exportBackup(); return; }
   if(action==='saveCloudUrl'){
     const input = document.getElementById('cloudUrlInput');
@@ -1494,6 +1657,20 @@ document.addEventListener('input', (e)=>{
   if(t.dataset.action==='reportTo'){
     state.reportTo = t.value;
     if(state.reportTo < state.reportFrom) state.reportFrom = state.reportTo;
+    render();
+    return;
+  }
+  if(t.dataset.action==='seasonFrom'){
+    const {to} = seasonRange();
+    state.seasonFrom = t.value;
+    if(state.seasonFrom > to) state.seasonTo = state.seasonFrom;
+    render();
+    return;
+  }
+  if(t.dataset.action==='seasonTo'){
+    const {from} = seasonRange();
+    state.seasonTo = t.value;
+    if(state.seasonTo < from) state.seasonFrom = state.seasonTo;
     render();
     return;
   }
