@@ -236,9 +236,9 @@
 
   /* A4 report (daily/monthly) - receipt printing stays on the 80mm layout above */
   .pr-a4-head{ text-align:center; margin-bottom:4mm; }
-  .pr-a4-head.with-logo{ display:flex; align-items:center; justify-content:center; gap:5mm; text-align:left; }
-  .pr-a4-head.with-logo .logo{ width:20mm; height:20mm; object-fit:contain; flex-shrink:0; }
-  .pr-a4-head.with-logo .head-text{ text-align:center; }
+  .pr-a4-head.with-logo{ display:flex; align-items:flex-start; gap:5mm; text-align:left; }
+  .pr-a4-head.with-logo .logo{ width:40mm; height:40mm; object-fit:contain; flex-shrink:0; }
+  .pr-a4-head.with-logo .head-text{ flex:1; text-align:center; }
   .pr-a4-head .name{ font-size:17px; font-weight:700; }
   .pr-a4-head .addr{ font-size:11px; color:#333; margin-top:1px; }
   .pr-a4-head .rtitle{ font-size:14px; font-weight:700; margin-top:3mm; }
