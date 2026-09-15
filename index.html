@@ -953,6 +953,7 @@ function renderSeason(){
   </div>
   <div class="actions">
     <button class="btn ghost" data-action="exportSeasonCsv" data-from="${from}" data-to="${to}">Export CSV</button>
+    <button class="btn ghost" data-action="shareSeasonReport" data-from="${from}" data-to="${to}">แชร์/บันทึกเป็นรูปภาพ</button>
     <button class="btn primary" data-action="printSeason" data-from="${from}" data-to="${to}">พิมพ์รายงาน</button>
   </div>` : `<div class="card"><div class="empty">ไม่มีข้อมูลในช่วงวันที่ที่เลือก</div></div>`}
   `;
@@ -1237,6 +1238,44 @@ function doPrintSeason(fromStr, toStr){
   prepareA4ReportPrint();
   document.getElementById('print-area').innerHTML = buildPrintSeasonHtml(fromStr, toStr);
   window.print();
+}
+
+// Safari (macOS and iOS alike) always stamps its own page title header and a
+// URL/date/page-count footer onto anything sent through window.print() -
+// there's no page-level CSS/JS to suppress it. Rendering the report to a
+// plain image sidesteps that entirely: nothing added, logo exactly where our
+// own CSS puts it, and the image shares/saves/prints cleanly from Photos.
+async function shareSeasonReport(fromStr, toStr){
+  if(typeof html2canvas==='undefined'){ alert('ไม่สามารถโหลดตัวช่วยสร้างรูปได้ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'); return; }
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'position:fixed;left:-99999px;top:0;width:297mm;background:#ffffff;padding:10mm 12mm;font-family:Sarabun,sans-serif;color:#000;';
+  wrapper.innerHTML = buildPrintSeasonHtml(fromStr, toStr);
+  document.body.appendChild(wrapper);
+  if(document.fonts && document.fonts.ready){ try{ await document.fonts.ready; }catch(e){} }
+  try{
+    const canvas = await html2canvas(wrapper, {backgroundColor:'#ffffff', scale:2});
+    document.body.removeChild(wrapper);
+    canvas.toBlob(async (blob)=>{
+      if(!blob){ alert('ไม่สามารถสร้างรูปรายงานได้'); return; }
+      const stamp = fromStr===toStr ? fromStr : `${fromStr}_ถึง_${toStr}`;
+      const fileName = `สรุปฤดู-${stamp}.png`;
+      const file = new File([blob], fileName, {type:'image/png'});
+      if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
+        try{
+          await navigator.share({files:[file], title:'สรุปข้อมูลประจำฤดู', text:fileName});
+          return;
+        }catch(e){ /* user cancelled the share sheet, or share failed - fall through to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }catch(e){
+    if(wrapper.parentNode) document.body.removeChild(wrapper);
+    alert('ไม่สามารถสร้างรูปรายงานได้ ลองอีกครั้ง');
+  }
 }
 
 function showToast(msg){
@@ -1604,6 +1643,7 @@ document.addEventListener('click', async (e)=>{
   if(action==='exportMonthlyCsv'){ exportMonthlyCsv(el.dataset.from, el.dataset.to); return; }
   if(action==='printSeason'){ doPrintSeason(el.dataset.from, el.dataset.to); return; }
   if(action==='exportSeasonCsv'){ exportSeasonCsv(el.dataset.from, el.dataset.to); return; }
+  if(action==='shareSeasonReport'){ await shareSeasonReport(el.dataset.from, el.dataset.to); return; }
   if(action==='exportBackup'){ exportBackup(); return; }
   if(action==='saveCloudUrl'){
     const input = document.getElementById('cloudUrlInput');
