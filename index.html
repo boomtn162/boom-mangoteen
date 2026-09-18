@@ -298,6 +298,20 @@ const state = { tab:'new', config:null, receipts:[], draft:null, viewId:null, hi
 
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
+// window.print() is unreliable on iOS: it's a documented no-op when the app
+// is running standalone (added to the Home Screen, which this app supports
+// via apple-mobile-web-app-capable), and even in a normal Safari tab it can
+// silently fail if anything async happens between the tap and the call. The
+// Web Share API doesn't have either problem, so iOS routes print buttons
+// through shareHtmlAsImage() instead - the share sheet still offers Print
+// (AirPrint), just with one extra tap.
+// iPadOS reports its platform as "MacIntel" by default, so touch support is
+// also checked to still catch iPads alongside iPhones/iPods.
+function isIOS(){
+  return /iP(hone|od|ad)/.test(navigator.platform) ||
+    (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+}
+
 // window.storage only exists inside Claude.ai's artifact viewer. When this file is opened
 // directly (downloaded, or added to the home screen for daily use), it's undefined and every
 // save silently fails - nothing persists between opens. Fall back to real localStorage so the
@@ -1037,10 +1051,57 @@ function prepareA4ReportPrint(){
   area.classList.add('mode-a4-report');
 }
 
-function doPrint(r){
+// Shares (or, failing that, downloads) a single blob as a file - the common
+// tail end of every "render to image then hand it to the user" flow below.
+async function shareOrDownloadBlob(blob, fileName, shareTitle, shareText){
+  if(!blob){ alert('ไม่สามารถสร้างรูปได้'); return; }
+  const file = new File([blob], fileName, {type:blob.type||'image/png'});
+  if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
+    try{
+      await navigator.share({files:[file], title:shareTitle, text:shareText});
+      return;
+    }catch(e){ /* user cancelled the share sheet, or share failed - fall through to download */ }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = fileName;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// Renders an HTML fragment offscreen and shares/downloads it as a PNG -
+// iOS's stand-in for window.print() (see isIOS() above for why), and also
+// used for the explicit "share as image" buttons on any device.
+async function shareHtmlAsImage(html, {width, padding, fileName, shareTitle, shareText}){
+  if(typeof html2canvas==='undefined'){ alert('ไม่สามารถโหลดตัวช่วยสร้างรูปได้ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'); return; }
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = `position:fixed;left:-99999px;top:0;width:${width};background:#ffffff;padding:${padding};font-family:Sarabun,sans-serif;color:#000;`;
+  wrapper.innerHTML = html;
+  document.body.appendChild(wrapper);
+  if(document.fonts && document.fonts.ready){ try{ await document.fonts.ready; }catch(e){} }
+  try{
+    const canvas = await html2canvas(wrapper, {backgroundColor:'#ffffff', scale:2});
+    document.body.removeChild(wrapper);
+    canvas.toBlob(blob=>shareOrDownloadBlob(blob, fileName, shareTitle, shareText), 'image/png');
+  }catch(e){
+    if(wrapper.parentNode) document.body.removeChild(wrapper);
+    alert('ไม่สามารถสร้างรูปได้ ลองอีกครั้ง');
+  }
+}
+
+async function doPrint(r){
+  if(isIOS()){
+    await shareHtmlAsImage(buildPrintHtml(r), {
+      width:'320px', padding:'16px',
+      fileName:`receipt-${formatReceiptNo(r.receiptNo)}.png`,
+      shareTitle:'ใบเสร็จ '+formatReceiptNo(r.receiptNo),
+      shareText:`ใบเสร็จ ${formatReceiptNo(r.receiptNo)} - ${r.ownerName}`
+    });
+    return;
+  }
   prepareThermalPrint();
   document.getElementById('print-area').innerHTML = buildPrintHtml(r);
-  // Call print() synchronously, not via setTimeout: iOS Safari only honors
+  // Call print() synchronously, not via setTimeout: Safari only honors
   // window.print() when it runs directly inside the user's tap - deferring it
   // even by a few ms drops the "user activation" and silently blocks the
   // print sheet from opening (no error, it just does nothing).
@@ -1048,32 +1109,11 @@ function doPrint(r){
 }
 
 function shareReceipt(r){
-  if(typeof html2canvas==='undefined'){ alert('ไม่สามารถโหลดตัวช่วยสร้างรูปได้ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'); return; }
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:320px;background:#ffffff;padding:16px;font-family:Sarabun,sans-serif;color:#000;';
-  wrapper.innerHTML = buildPrintHtml(r);
-  document.body.appendChild(wrapper);
-  html2canvas(wrapper, {backgroundColor:'#ffffff', scale:2}).then(canvas=>{
-    canvas.toBlob(async (blob)=>{
-      document.body.removeChild(wrapper);
-      if(!blob){ alert('ไม่สามารถสร้างรูปใบเสร็จได้'); return; }
-      const fileName = `receipt-${formatReceiptNo(r.receiptNo)}.png`;
-      const file = new File([blob], fileName, {type:'image/png'});
-      if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
-        try{
-          await navigator.share({files:[file], title:'ใบเสร็จ '+formatReceiptNo(r.receiptNo), text:`ใบเสร็จ ${formatReceiptNo(r.receiptNo)} - ${r.ownerName}`});
-          return;
-        }catch(e){ /* user cancelled the share sheet, or share failed - fall through to download */ }
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = fileName;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  }).catch(()=>{
-    if(wrapper.parentNode) document.body.removeChild(wrapper);
-    alert('ไม่สามารถสร้างรูปใบเสร็จได้ ลองอีกครั้ง');
+  shareHtmlAsImage(buildPrintHtml(r), {
+    width:'320px', padding:'16px',
+    fileName:`receipt-${formatReceiptNo(r.receiptNo)}.png`,
+    shareTitle:'ใบเสร็จ '+formatReceiptNo(r.receiptNo),
+    shareText:`ใบเสร็จ ${formatReceiptNo(r.receiptNo)} - ${r.ownerName}`
   });
 }
 
@@ -1120,7 +1160,15 @@ function buildPrintReportHtml(dateStr){
   <div class="pr-a4-foot">พิมพ์เมื่อ ${formatThaiDate(todayLocalISO())}</div>
   `;
 }
-function doPrintReport(dateStr){
+async function doPrintReport(dateStr){
+  if(isIOS()){
+    await shareHtmlAsImage(buildPrintReportHtml(dateStr), {
+      width:'297mm', padding:'10mm 12mm',
+      fileName:`รายงานวัน-${dateStr}.png`,
+      shareTitle:'รายงานประจำวัน', shareText:formatThaiDate(dateStr)
+    });
+    return;
+  }
   prepareA4ReportPrint();
   document.getElementById('print-area').innerHTML = buildPrintReportHtml(dateStr);
   window.print();
@@ -1171,7 +1219,16 @@ function buildPrintMonthlyHtml(fromDate, toDate){
   <div class="pr-a4-foot">พิมพ์เมื่อ ${formatThaiDate(todayLocalISO())}</div>
   `;
 }
-function doPrintMonthly(fromDate, toDate){
+async function doPrintMonthly(fromDate, toDate){
+  if(isIOS()){
+    const stamp = fromDate===toDate ? fromDate : `${fromDate}_ถึง_${toDate}`;
+    await shareHtmlAsImage(buildPrintMonthlyHtml(fromDate, toDate), {
+      width:'297mm', padding:'10mm 12mm',
+      fileName:`รายงานช่วง-${stamp}.png`,
+      shareTitle:'รายงานรายเดือน', shareText:formatDateRangeThai(fromDate, toDate)
+    });
+    return;
+  }
   prepareA4ReportPrint();
   document.getElementById('print-area').innerHTML = buildPrintMonthlyHtml(fromDate, toDate);
   window.print();
@@ -1236,48 +1293,26 @@ function buildPrintSeasonHtml(fromStr, toStr){
   <div class="pr-a4-foot">พิมพ์เมื่อ ${formatThaiDate(todayLocalISO())}</div>
   `;
 }
-function doPrintSeason(fromStr, toStr){
+async function doPrintSeason(fromStr, toStr){
+  if(isIOS()){ await shareSeasonReport(fromStr, toStr); return; }
   prepareA4ReportPrint();
   document.getElementById('print-area').innerHTML = buildPrintSeasonHtml(fromStr, toStr);
   window.print();
 }
 
+// Also used directly by the "แชร์/บันทึกเป็นรูปภาพ" button on any device.
 // Safari (macOS and iOS alike) always stamps its own page title header and a
 // URL/date/page-count footer onto anything sent through window.print() -
 // there's no page-level CSS/JS to suppress it. Rendering the report to a
 // plain image sidesteps that entirely: nothing added, logo exactly where our
 // own CSS puts it, and the image shares/saves/prints cleanly from Photos.
 async function shareSeasonReport(fromStr, toStr){
-  if(typeof html2canvas==='undefined'){ alert('ไม่สามารถโหลดตัวช่วยสร้างรูปได้ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่'); return; }
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'position:fixed;left:-99999px;top:0;width:297mm;background:#ffffff;padding:10mm 12mm;font-family:Sarabun,sans-serif;color:#000;';
-  wrapper.innerHTML = buildPrintSeasonHtml(fromStr, toStr);
-  document.body.appendChild(wrapper);
-  if(document.fonts && document.fonts.ready){ try{ await document.fonts.ready; }catch(e){} }
-  try{
-    const canvas = await html2canvas(wrapper, {backgroundColor:'#ffffff', scale:2});
-    document.body.removeChild(wrapper);
-    canvas.toBlob(async (blob)=>{
-      if(!blob){ alert('ไม่สามารถสร้างรูปรายงานได้'); return; }
-      const stamp = fromStr===toStr ? fromStr : `${fromStr}_ถึง_${toStr}`;
-      const fileName = `สรุปฤดู-${stamp}.png`;
-      const file = new File([blob], fileName, {type:'image/png'});
-      if(navigator.share && (!navigator.canShare || navigator.canShare({files:[file]}))){
-        try{
-          await navigator.share({files:[file], title:'สรุปข้อมูลประจำฤดู', text:fileName});
-          return;
-        }catch(e){ /* user cancelled the share sheet, or share failed - fall through to download */ }
-      }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = fileName;
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  }catch(e){
-    if(wrapper.parentNode) document.body.removeChild(wrapper);
-    alert('ไม่สามารถสร้างรูปรายงานได้ ลองอีกครั้ง');
-  }
+  const stamp = fromStr===toStr ? fromStr : `${fromStr}_ถึง_${toStr}`;
+  await shareHtmlAsImage(buildPrintSeasonHtml(fromStr, toStr), {
+    width:'297mm', padding:'10mm 12mm',
+    fileName:`สรุปฤดู-${stamp}.png`,
+    shareTitle:'สรุปข้อมูลประจำฤดู', shareText:`สรุปฤดู-${stamp}.png`
+  });
 }
 
 function showToast(msg){
@@ -1342,7 +1377,7 @@ async function doPrintSelectedA4(ids){
   showToast(`กำลังจัดหน้าเอกสาร (0/${pages.length})...`);
   if(document.fonts && document.fonts.ready){ try{ await document.fonts.ready; }catch(e){} }
 
-  const images = [];
+  const canvases = [];
   try{
     for(let i=0;i<pages.length;i++){
       showToast(`กำลังจัดหน้าเอกสาร (${i+1}/${pages.length})...`);
@@ -1350,11 +1385,32 @@ async function doPrintSelectedA4(ids){
       await new Promise(res=>requestAnimationFrame(()=>requestAnimationFrame(res)));
       const canvas = await html2canvas(pageEl, {scale:2, backgroundColor:'#ffffff'});
       document.body.removeChild(pageEl);
-      images.push(canvas.toDataURL('image/png'));
+      canvases.push(canvas);
     }
   }catch(e){
     hideToast();
     alert('ไม่สามารถจัดหน้าเอกสารได้ ลองอีกครั้ง');
+    return;
+  }
+  hideToast();
+
+  // window.print() can't be trusted on iOS after this much async work (see
+  // isIOS() above), so hand the pages to the share sheet instead - one
+  // multi-file share if the pages fit, otherwise one download per page.
+  if(isIOS()){
+    const files = await Promise.all(canvases.map((canvas, idx)=>new Promise(res=>{
+      canvas.toBlob(blob=>res(new File([blob], `a4-page-${idx+1}.png`, {type:'image/png'})), 'image/png');
+    })));
+    if(navigator.share && (!navigator.canShare || navigator.canShare({files}))){
+      try{ await navigator.share({files, title:'ใบเสร็จ A4'}); return; }catch(e){ /* fall through to per-file download */ }
+    }
+    files.forEach(file=>{
+      const url = URL.createObjectURL(file);
+      const a = document.createElement('a');
+      a.href = url; a.download = file.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
     return;
   }
 
@@ -1362,8 +1418,7 @@ async function doPrintSelectedA4(ids){
   const area = document.getElementById('print-area');
   area.classList.remove('mode-a4-report');
   area.classList.add('mode-a4');
-  area.innerHTML = images.map((src,idx)=>`<img class="a4-page-img" src="${src}" style="page-break-after:${idx<images.length-1?'always':'auto'};">`).join('');
-  hideToast();
+  area.innerHTML = canvases.map((canvas,idx)=>`<img class="a4-page-img" src="${canvas.toDataURL('image/png')}" style="page-break-after:${idx<canvases.length-1?'always':'auto'};">`).join('');
   window.print();
 }
 
@@ -1631,7 +1686,7 @@ document.addEventListener('click', async (e)=>{
   if(action==='backHistory'){ state.tab='history'; render(); return; }
   if(action==='printExisting'){
     const r = state.receipts.find(x=>x.id===el.dataset.id);
-    if(r) doPrint(r);
+    if(r) await doPrint(r);
     return;
   }
   if(action==='shareReceipt'){
@@ -1639,11 +1694,11 @@ document.addEventListener('click', async (e)=>{
     if(r) shareReceipt(r);
     return;
   }
-  if(action==='printDaily'){ doPrintReport(el.dataset.date); return; }
+  if(action==='printDaily'){ await doPrintReport(el.dataset.date); return; }
   if(action==='exportCsv'){ exportCsv(el.dataset.date); return; }
-  if(action==='printMonthly'){ doPrintMonthly(el.dataset.from, el.dataset.to); return; }
+  if(action==='printMonthly'){ await doPrintMonthly(el.dataset.from, el.dataset.to); return; }
   if(action==='exportMonthlyCsv'){ exportMonthlyCsv(el.dataset.from, el.dataset.to); return; }
-  if(action==='printSeason'){ doPrintSeason(el.dataset.from, el.dataset.to); return; }
+  if(action==='printSeason'){ await doPrintSeason(el.dataset.from, el.dataset.to); return; }
   if(action==='exportSeasonCsv'){ exportSeasonCsv(el.dataset.from, el.dataset.to); return; }
   if(action==='shareSeasonReport'){ await shareSeasonReport(el.dataset.from, el.dataset.to); return; }
   if(action==='exportBackup'){ exportBackup(); return; }
